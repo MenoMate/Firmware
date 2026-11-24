@@ -147,7 +147,6 @@ class ServerCallbacks : public BLEServerCallbacks {
     Serial.println("[BLE] Client disconnected");
     // Per requirement: Outputs OFF when a BLE client disconnects.
     allOff();
-    pushStatusNotification();
   }
 };
 
