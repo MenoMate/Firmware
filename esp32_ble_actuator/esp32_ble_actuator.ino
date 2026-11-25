@@ -26,6 +26,7 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <esp_system.h>
+#include <esp_task_wdt.h>
 
 // ---------- Hardware Pins ----------
 const int HEAT_PIN   = 3; // Heater relay IN (active-LOW)
@@ -208,8 +209,11 @@ void processPendingCommand(const char* raw) {
       char lvlChar = json.charAt(lvlIdx + 8);
       int lvl = lvlChar - '0';
       if (lvl >= 0 && lvl <= 3) {
+        bool wasOff = (heatLevel == 0);
         heatLevel = lvl;
-        heatPhaseStart = millis();
+        if (wasOff || lvl == 0) {
+          heatPhaseStart = millis();
+        }
         Serial.print("[CMD] Heat level set to ");
         Serial.println(heatLevel);
       } else {
@@ -267,6 +271,8 @@ void setup() {
 
   // Initialize BLE Stack
   BLEDevice::init(DEVICE_NAME);
+  // Lower TX power (+3 dBm vs default +9 dBm) to reduce 5V rail sag on ESP32-C3 SuperMini
+  BLEDevice::setPower(ESP_PWR_LVL_P3);
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new ServerCallbacks());
 
@@ -309,6 +315,15 @@ void setup() {
   Serial.println("'");
   Serial.print("[BLE] Service UUID: ");
   Serial.println(SERVICE_UUID);
+
+  // 3-second hardware watchdog: if EMI/brownout ever hangs loop(), reset to safe OFF
+  esp_task_wdt_config_t wdt_config = {
+    .timeout_ms = 3000,
+    .idle_core_mask = 0,
+    .trigger_panic = true
+  };
+  esp_task_wdt_reconfigure(&wdt_config);
+  esp_task_wdt_add(NULL);
 }
 
 // ---------- Arduino Main Loop ----------
@@ -349,7 +364,8 @@ void loop() {
 
   // 5. Notify Flutter if active relay states changed (e.g. duty cycle transition)
   if (deviceConnected && (prevHeatRelayOn != heatRelayOn || prevMotorRelayOn != motorRelayOn)) {
-    // Only notify if there's an actual active-state flip
+    // Brief settle so relay/motor inrush current finishes before BLE TX burst
+    delay(15);
     pushStatusNotification();
   }
 
@@ -365,5 +381,6 @@ void loop() {
     pushStatusNotification();
   }
 
+  esp_task_wdt_reset();
   delay(20); // Small cooperative yield to FreeRTOS watchdog & BLE stack
 }
